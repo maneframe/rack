@@ -77,6 +77,7 @@ module Rack
         gzip  =::Zlib::GzipWriter.new(self)
         gzip.mtime = @mtime
         @body.each { |part|
+          next if part.size == 0
           gzip.write(part)
           gzip.flush
         }
