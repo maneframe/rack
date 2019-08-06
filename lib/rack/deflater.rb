@@ -66,7 +66,8 @@ module Rack
         headers.delete('Content-Length')
         mtime = headers["Last-Modified"]
         mtime = Time.httpdate(mtime).to_i if mtime
-        [status, headers, GzipStream.new(body, mtime, @sync)]
+        is_chunked = headers['Transfer-Encoding'] == "chunked"
+        [status, headers, GzipStream.new(body, mtime, @sync, is_chunked)]
       when "identity"
         [status, headers, body]
       when nil
@@ -77,10 +78,11 @@ module Rack
     end
 
     class GzipStream
-      def initialize(body, mtime, sync)
+      def initialize(body, mtime, sync, is_chunked)
         @sync = sync
         @body = body
         @mtime = mtime
+        @is_chunked = is_chunked
       end
 
       def each(&block)
@@ -88,8 +90,19 @@ module Rack
         gzip = ::Zlib::GzipWriter.new(self)
         gzip.mtime = @mtime if @mtime
         @body.each { |part|
-          gzip.write(part)
-          gzip.flush if @sync
+          if @is_chunked
+            match = part.match(/[0-9a-f]+\r\n(.*)\r\n/m)
+            str = match[1]
+            if str.empty?
+              @writer.call("0\r\n\r\n")
+            else
+              gzip.write(str)
+              gzip.flush
+            end
+          else
+            gzip.write(part)
+            gzip.flush if @sync
+          end
         }
       ensure
         gzip.close
@@ -97,7 +110,11 @@ module Rack
       end
 
       def write(data)
-        @writer.call(data)
+        if @is_chunked
+          @writer.call("#{data.size.to_s(16)}\r\n#{data}\r\n")
+        else
+          @writer.call(data)
+        end
       end
 
       def close
